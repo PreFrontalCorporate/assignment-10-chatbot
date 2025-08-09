@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Customer Persona Chatbot — Assignment #10</title>
-  <!-- build: v2025-08-09T01:30Z -->
   <style>
     :root {
       --bg:#0b0c10; --panel:#121317; --muted:#1a1c22; --text:#e8e8ea; --sub:#b9bbbf; --accent:#7dd3fc; --ok:#a7f3d0; --warn:#fde68a; --err:#fecaca;
@@ -59,7 +58,7 @@
 
 <div class="container">
   <aside>
-    <!-- API section removed (key not needed in browser with proxy) -->
+    <!-- ✨ API Setup removed: no key or model controls in the UI -->
     <div class="section">
       <h2>Persona Prompt Template</h2>
       <textarea id="systemPrompt" placeholder="Describe your target customer persona. Ex: 'You are Aisha, a cost‑conscious student who buys mid‑tier phone accessories on weekends. You care about durability, fast shipping, and bundle discounts.'"></textarea>
@@ -114,11 +113,16 @@
 
 <script>
 (() => {
+  // Cloud Run proxy; API key is injected server-side (Secret Manager).
   const PROXY_URL = "https://gemini-proxy-656392949614.us-central1.run.app/generate";
+
+  // Clean up any legacy key stored by older builds
+  try { localStorage.removeItem('gg_api_key'); } catch (e) {}
 
   const el = id => document.getElementById(id);
   const state = {
-    model: localStorage.getItem('gg_model') || 'gemini-2.5-pro',
+    // Model fixed; you can change the default, but not exposed in UI
+    model: 'gemini-2.5-pro',
     sys: localStorage.getItem('gg_system') || '',
     rails: localStorage.getItem('gg_rails') || '',
     support: localStorage.getItem('gg_support') || '',
@@ -236,7 +240,6 @@
     const userText = el('userInput').value.trim();
     if (!userText && !state.lastImage) return;
 
-    // local guardrails pre-check
     const v = violatesGuardrails(userText);
     if (v) { alert(v); return; }
 
@@ -245,7 +248,6 @@
     state.thread.push(userMsg);
     renderThread();
     el('userInput').value = '';
-    // reset image one-shot
     state.lastImage = null; el('imagePreview').innerHTML = ''; el('imageInput').value='';
 
     // Compose contents -> Proxy
@@ -269,9 +271,7 @@
     for (const m of state.thread) {
       const parts = [];
       if (m.content) parts.push({ text: m.content });
-      if (m.image) parts.push({
-        inline_data: { mime_type: m.image.mimeType, data: m.image.data }
-      });
+      if (m.image) parts.push({ inline_data: { mime_type: m.image.mimeType, data: m.image.data } });
       contents.push({ role: m.role === 'user' ? 'user' : 'model', parts });
     }
 
@@ -284,12 +284,9 @@
         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
         { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" }
       ],
-      generationConfig: {
-        temperature: 0.7, topK: 40, topP: 0.9, maxOutputTokens: 800
-      }
+      generationConfig: { temperature: 0.7, topK: 40, topP: 0.9, maxOutputTokens: 800 }
     };
 
-    // show placeholder
     const aiIndex = state.thread.length;
     state.thread.push({ role:'model', content:'…thinking…' });
     renderThread();
@@ -302,13 +299,9 @@
         body: JSON.stringify(body),
         signal: state.controller.signal
       });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`Proxy ${res.status}: ${t}`);
-      }
+      if (!res.ok) throw new Error(`Proxy ${res.status}: ${await res.text()}`);
       const data = await res.json();
-      const text = (data.candidates?.[0]?.content?.parts || [])
-        .map(p => p.text || '').join('');
+      const text = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
       const postV = violatesGuardrails(text);
       const finalText = postV ? `[Response blocked by guardrails]\n\n${postV}` : text || '(no response)';
       state.thread[aiIndex] = { role:'model', content: finalText };
