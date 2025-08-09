@@ -50,7 +50,7 @@
 <header>
   <h1>Assignment #10 — Customer Persona Chatbot</h1>
   <div class="right">
-    <span class="pill">Static • GitHub Pages</span>
+    <span class="pill">Proxy • Cloud Run</span>
     <button class="btn" id="exportTemplateBtn">Export Template JSON</button>
     <button class="btn" id="newThreadBtn">New Thread</button>
   </div>
@@ -58,21 +58,7 @@
 
 <div class="container">
   <aside>
-    <div class="section">
-      <h2>API Setup</h2>
-      <div class="col">
-        <input id="apiKey" placeholder="Paste GOOGLE_GENERATIVE_AI_API_KEY" />
-        <div class="row">
-          <select id="model">
-            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-          </select>
-          <button class="btn" id="saveApi">Save</button>
-        </div>
-        <div class="small">Tip: In Google Cloud Console → restrict this key by HTTP referrer to your GitHub Pages domain.</div>
-      </div>
-    </div>
-
+    <!-- API section removed (key not needed in browser with proxy) -->
     <div class="section">
       <h2>Persona Prompt Template</h2>
       <textarea id="systemPrompt" placeholder="Describe your target customer persona. Ex: 'You are Aisha, a cost‑conscious student who buys mid‑tier phone accessories on weekends. You care about durability, fast shipping, and bundle discounts.'"></textarea>
@@ -91,7 +77,9 @@
 
     <div class="section">
       <h2>Supporting Interviews (notes)</h2>
-      <textarea id="supporting" placeholder="- Interview #1 (Jules, 24): pain points...\n- Interview #2 (Sam, 32): goals...\n- Interview #3 (Mai, 19): objections..."></textarea>
+      <textarea id="supporting" placeholder="- Interview #1 (Jules, 24): pain points...
+- Interview #2 (Sam, 32): goals...
+- Interview #3 (Mai, 19): objections..."></textarea>
       <button class="btn" id="saveSupporting">Save Notes</button>
     </div>
 
@@ -107,7 +95,7 @@
     <div class="section msglist" id="messages"></div>
 
     <div class="section">
-      <div class="meta">Attach image (optional): the model can talk about an image (jpg/png). </div>
+      <div class="meta">Attach image (optional): the model can talk about an image (jpg/png).</div>
       <input type="file" id="imageInput" accept="image/png,image/jpeg" />
       <div id="imagePreview" class="small"></div>
     </div>
@@ -125,9 +113,10 @@
 
 <script>
 (() => {
+  const PROXY_URL = "https://gemini-proxy-656392949614.us-central1.run.app/generate";
+
   const el = id => document.getElementById(id);
   const state = {
-    key: localStorage.getItem('gg_api_key') || '',
     model: localStorage.getItem('gg_model') || 'gemini-2.5-pro',
     sys: localStorage.getItem('gg_system') || '',
     rails: localStorage.getItem('gg_rails') || '',
@@ -139,8 +128,6 @@
   };
 
   // UI init
-  el('apiKey').value = state.key;
-  el('model').value = state.model;
   el('systemPrompt').value = state.sys;
   el('guardrails').value = state.rails;
   el('supporting').value = state.support;
@@ -158,14 +145,6 @@
   }
 
   // Save buttons
-  el('saveApi').onclick = () => {
-    state.key = el('apiKey').value.trim();
-    state.model = el('model').value;
-    localStorage.setItem('gg_api_key', state.key);
-    localStorage.setItem('gg_model', state.model);
-    logEvent('api.update', { model: state.model, hasKey: !!state.key });
-    alert('Saved. If you changed the key, reload the page if calls fail.');
-  };
   el('savePrompt').onclick = () => {
     state.sys = el('systemPrompt').value;
     localStorage.setItem('gg_system', state.sys);
@@ -253,8 +232,6 @@
   }
 
   async function send() {
-    const key = state.key;
-    if (!key) return alert('Paste your GOOGLE_GENERATIVE_AI_API_KEY first.');
     const userText = el('userInput').value.trim();
     if (!userText && !state.lastImage) return;
 
@@ -270,9 +247,8 @@
     // reset image one-shot
     state.lastImage = null; el('imagePreview').innerHTML = ''; el('imageInput').value='';
 
-    // Compose contents -> Gemini REST
+    // Compose contents -> Proxy
     const contents = [];
-    // System prompt + rails + support as meta-instruction
     const sys = (state.sys||'').trim();
     const rails = (state.rails||'').trim();
     const support = (state.support||'').trim();
@@ -289,7 +265,6 @@
       });
     }
 
-    // prior messages
     for (const m of state.thread) {
       const parts = [];
       if (m.content) parts.push({ text: m.content });
@@ -299,9 +274,8 @@
       contents.push({ role: m.role === 'user' ? 'user' : 'model', parts });
     }
 
-    // Streaming via fetch (text only; REST v1beta)
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(state.model)}:generateContent?key=${encodeURIComponent(key)}`;
     const body = {
+      model: state.model,
       contents,
       safetySettings: [
         { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
@@ -321,7 +295,7 @@
 
     try {
       state.controller = new AbortController();
-      const res = await fetch(endpoint, {
+      const res = await fetch(PROXY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -329,17 +303,16 @@
       });
       if (!res.ok) {
         const t = await res.text();
-        throw new Error(`API ${res.status}: ${t}`);
+        throw new Error(`Proxy ${res.status}: ${t}`);
       }
       const data = await res.json();
       const text = (data.candidates?.[0]?.content?.parts || [])
         .map(p => p.text || '').join('');
-      // post-check guardrails (very basic)
       const postV = violatesGuardrails(text);
       const finalText = postV ? `[Response blocked by guardrails]\n\n${postV}` : text || '(no response)';
       state.thread[aiIndex] = { role:'model', content: finalText };
       renderThread();
-      logEvent('chat.turn', { promptLen: (userText||'').length, respLen: finalText.length });
+      logEvent('chat.turn', { respLen: finalText.length });
     } catch (err) {
       state.thread[aiIndex] = { role:'model', content:`[Error] ${err.message}` };
       renderThread();
