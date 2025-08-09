@@ -115,17 +115,21 @@
 (() => {
   const PROXY_URL = "https://gemini-proxy-656392949614.us-central1.run.app/generate";
 
-  // Clean out any legacy key in localStorage (we're using the proxy)
-  try { localStorage.removeItem('gg_api_key'); } catch {}
-
-  // Safety profiles
-  const SAFETY_DEFAULT = [
+  // ---- Tunables
+  const SAFETY = [
     { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
     { category: "HARM_CATEGORY_HATE_SPEECH",      threshold: "BLOCK_MEDIUM_AND_ABOVE" },
     { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_MEDIUM_AND_ABOVE" },
     { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
     { category: "HARM_CATEGORY_CIVIC_INTEGRITY",   threshold: "BLOCK_MEDIUM_AND_ABOVE" }
   ];
+  const MAX_OUTPUT_TOKENS = 2048;   // larger headroom
+  const HISTORY_TURNS = 6;          // keep last N turns (user+model pairs)
+  const SYS_CHAR_BUDGET = 3500;     // cap persona+rails+support text
+  const AUTOCONTINUE_LIMIT = 2;     // how many times we auto-continue on MAX_TOKENS
+
+  // Clear any legacy API key (we use the proxy)
+  try { localStorage.removeItem('gg_api_key'); } catch {}
 
   const el = id => document.getElementById(id);
   const state = {
@@ -136,10 +140,11 @@
     thread: [],
     controller: null,
     lastImage: null,
-    log: JSON.parse(localStorage.getItem('gg_log') || '[]')
+    log: JSON.parse(localStorage.getItem('gg_log') || '[]'),
+    primed: false   // only inject the persona block once per thread
   };
 
-  // --- UI init
+  // ---------- UI init
   el('systemPrompt').value = state.sys;
   el('guardrails').value = state.rails;
   el('supporting').value = state.support;
@@ -156,7 +161,7 @@
     el('log').textContent = state.log.map(e => `[${e.t}] ${e.kind}: ${JSON.stringify(e).slice(0,400)}`).join('\n');
   }
 
-  // --- Save actions
+  // ---------- Saves
   el('savePrompt').onclick = () => {
     state.sys = el('systemPrompt').value;
     localStorage.setItem('gg_system', state.sys);
@@ -184,6 +189,7 @@
   el('newThreadBtn').onclick = () => {
     if (!confirm('Start a new thread? Current messages will be cleared.')) return;
     state.thread = [];
+    state.primed = false;
     renderThread();
     state.lastImage = null;
     el('imagePreview').innerHTML = '';
@@ -191,7 +197,7 @@
     logEvent('thread.new', {});
   };
 
-  // --- Image preview/load
+  // ---------- Image preview/load
   el('imageInput').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     if (!f) return;
@@ -205,7 +211,7 @@
     });
   }
 
-  // --- Chat controls
+  // ---------- Chat controls
   el('sendBtn').onclick = send;
   el('userInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -235,7 +241,7 @@
     list.scrollTop = list.scrollHeight;
   }
 
-  // Basic local guardrails
+  // ---------- Local guardrails
   const banned = [/(?<!\w)ssn(?!\w)/i, /credit\s*card/i, /kill\s+yourself/i, /racial\s+slur/i];
   function violatesGuardrails(text) {
     if (!text) return false;
@@ -243,53 +249,65 @@
     return false;
   }
 
-  function buildContents() {
+  // ---------- Build contents with trimming
+  function buildContents(includePersonaOnce=true) {
     const contents = [];
-    const sys = (state.sys||'').trim();
-    const rails = (state.rails||'').trim();
-    const support = (state.support||'').trim();
-    const sysBlock = [
-      (sys ? `ROLE: Customer Persona\n${sys}` : ''),
-      (rails ? `GUIDERAILS:\n${rails}` : ''),
-      (support ? `SUPPORTING INTERVIEWS:\n${support}` : '')
-    ].filter(Boolean).join('\n\n').slice(0, 6000);
+    if (includePersonaOnce && !state.primed) {
+      const sys = (state.sys||'').trim().slice(0, SYS_CHAR_BUDGET);
+      const rails = (state.rails||'').trim().slice(0, SYS_CHAR_BUDGET);
+      const support = (state.support||'').trim().slice(0, SYS_CHAR_BUDGET);
+      const sysBlock = [
+        (sys ? `ROLE: Customer Persona\n${sys}` : ''),
+        (rails ? `GUIDERAILS:\n${rails}` : ''),
+        (support ? `SUPPORTING INTERVIEWS:\n${support}` : '')
+      ].filter(Boolean).join('\n\n');
 
-    if (sysBlock) {
-      contents.push({
-        role: 'user',
-        parts: [{ text: `You are role‑playing the following customer persona and must obey guardrails and cite interviews where relevant.\n\n${sysBlock}` }]
-      });
+      if (sysBlock) {
+        contents.push({
+          role: 'user',
+          parts: [{ text: `You are role‑playing the following customer persona and must obey guardrails and cite interviews where relevant.\n\n${sysBlock}` }]
+        });
+      }
     }
 
+    // Keep only the last N turns to limit prompt size
+    const turns = [];
     for (const m of state.thread) {
       const parts = [];
       if (m.content) parts.push({ text: m.content });
       if (m.image) parts.push({ inline_data: { mime_type: m.image.mimeType, data: m.image.data } });
-      contents.push({ role: m.role === 'user' ? 'user' : 'model', parts });
+      turns.push({ role: m.role === 'user' ? 'user' : 'model', parts });
     }
+    const limited = turns.slice(-HISTORY_TURNS);
+    contents.push(...limited);
     return contents;
   }
 
-  function extractText(data) {
-    // Prefer candidate text when available
+  // ---------- Response helpers
+  function parseResponse(data) {
     const cand = data?.candidates?.[0];
     const parts = cand?.content?.parts || [];
     const text = parts.map(p => p.text || '').join('').trim();
-
     const finish = cand?.finishReason || cand?.finish_reason || '';
-    const blocked = (finish && finish !== 'STOP') || (!data?.candidates?.length && data?.promptFeedback);
-    const blockReason = data?.promptFeedback?.blockReason || data?.promptFeedback?.block_reason || finish || null;
+    const pf = data?.promptFeedback;
+    // If there are no candidates at all, treat as blocked for some reason
+    const blockedForSafety = !!pf && !data?.candidates?.length;
+    const isMaxTokens = finish === 'MAX_TOKENS';
+    return { text, finish, blockedForSafety, isMaxTokens, promptFeedback: pf, cand };
+  }
 
-    // Build a readable safety summary if blocked
-    let safetyNote = '';
-    if (blocked) {
-      const sr = (cand?.safetyRatings || data?.promptFeedback?.safetyRatings || [])
-        .map(r => `${r.category || r.categoryType || 'CATEGORY'}:${r.probability || r.prob || ''}`)
-        .join(', ');
-      safetyNote = `Blocked by safety (${blockReason || 'UNKNOWN'}). ${sr ? 'Ratings: ' + sr : ''}`;
+  async function callModel(body) {
+    const res = await fetch(PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: state.controller?.signal
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Proxy ${res.status}: ${t}`);
     }
-
-    return { text, blocked, blockReason, finish, safetyNote };
+    return res.json();
   }
 
   async function send() {
@@ -305,47 +323,67 @@
     el('userInput').value = '';
     state.lastImage = null; el('imagePreview').innerHTML = ''; el('imageInput').value='';
 
-    const body = {
-      model: state.model,
-      contents: buildContents(),
-      safetySettings: SAFETY_DEFAULT,
-      generationConfig: { temperature: 0.7, topK: 40, topP: 0.9, maxOutputTokens: 1024 }
-    };
-
     const aiIndex = state.thread.length;
     state.thread.push({ role:'model', content:'…thinking…' });
     renderThread();
 
     try {
       state.controller = new AbortController();
-      const res = await fetch(PROXY_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: state.controller.signal
-      });
 
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`Proxy ${res.status}: ${t}`);
+      // First call: include persona if we haven't primed this thread yet
+      let body = {
+        model: state.model,
+        contents: buildContents(true),
+        safetySettings: SAFETY,
+        generationConfig: { temperature: 0.7, topK: 40, topP: 0.9, maxOutputTokens: MAX_OUTPUT_TOKENS }
+      };
+      let data = await callModel(body);
+      let { text, finish, blockedForSafety, isMaxTokens, promptFeedback } = parseResponse(data);
+
+      // If MAX_TOKENS and we got partial text, keep it and try to continue up to N times
+      // If MAX_TOKENS and empty text, ask the model to continue explicitly.
+      let assembled = text || '';
+      let continues = 0;
+      state.primed = true; // after first call we consider the thread primed
+
+      while (isMaxTokens && continues < AUTOCONTINUE_LIMIT) {
+        continues++;
+        // append the partial text to thread for context, ask to continue
+        state.thread[aiIndex] = { role: 'model', content: (assembled || '…') };
+        const contUser = { role:'user', content:'Continue.' };
+        state.thread.push(contUser);
+
+        body = {
+          model: state.model,
+          contents: buildContents(false), // no persona again
+          safetySettings: SAFETY,
+          generationConfig: { temperature: 0.7, topK: 40, topP: 0.9, maxOutputTokens: MAX_OUTPUT_TOKENS }
+        };
+        data = await callModel(body);
+        const parsed = parseResponse(data);
+        assembled += (assembled && parsed.text ? "\n" : "") + (parsed.text || '');
+        finish = parsed.finish;
+        isMaxTokens = parsed.isMaxTokens;
       }
 
-      const data = await res.json();
-      const { text, blocked, safetyNote, finish } = extractText(data);
-
-      let finalText = text;
+      // Decide final text
+      let finalText = assembled.trim();
       if (!finalText) {
-        finalText = blocked ? `[${safetyNote || 'Response blocked by safety'}]` : '(no response)';
+        if (blockedForSafety) {
+          // Show real reason from promptFeedback
+          const reason = promptFeedback?.blockReason || 'SAFETY';
+          const ratings = (promptFeedback?.safetyRatings || []).map(r => `${r.category}:${r.probability}`).join(', ');
+          finalText = `[Blocked (${reason})]${ratings ? ' Ratings: ' + ratings : ''}`;
+        } else if (finish && finish !== 'STOP') {
+          finalText = `[Stopped early (${finish}). Try again or simplify the prompt.]`;
+        } else {
+          finalText = '(no response)';
+        }
       }
 
       state.thread[aiIndex] = { role:'model', content: finalText };
       renderThread();
-
-      logEvent('chat.turn', {
-        finishReason: finish || null,
-        blocked: !!blocked,
-        respLen: (finalText || '').length
-      });
+      logEvent('chat.turn', { finishReason: finish || null, blocked: !!blockedForSafety, respLen: finalText.length });
 
     } catch (err) {
       state.thread[aiIndex] = { role:'model', content:`[Error] ${err.message}` };
