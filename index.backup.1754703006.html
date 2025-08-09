@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Customer Persona Chatbot — Assignment #10</title>
+  <style>
+    :root {
+      --bg:#0b0c10; --panel:#121317; --muted:#1a1c22; --text:#e8e8ea; --sub:#b9bbbf; --accent:#7dd3fc; --ok:#a7f3d0; --warn:#fde68a; --err:#fecaca;
+      --border:#2a2d36;
+    }
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;background:var(--bg);color:var(--text)}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:10}
+    header h1{font-size:16px;margin:0;font-weight:600}
+    header .right{display:flex;gap:8px;align-items:center}
+    .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:var(--muted);color:var(--sub);font-size:12px}
+    .container{display:grid;grid-template-columns:360px 1fr;min-height:calc(100vh - 54px)}
+    aside{border-right:1px solid var(--border);background:var(--panel);padding:14px 12px;overflow:auto}
+    main{padding:16px;display:flex;flex-direction:column;gap:12px}
+    h2{font-size:14px;margin:14px 0 8px;color:var(--sub);letter-spacing:.2px}
+    textarea,input,select{width:100%;background:var(--muted);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:10px;font:inherit;outline:none}
+    textarea{min-height:84px;resize:vertical}
+    .row{display:flex;gap:8px;align-items:center}
+    .col{display:flex;flex-direction:column;gap:8px}
+    .btn{cursor:pointer;border:1px solid var(--border);background:var(--muted);color:var(--text);padding:10px 12px;border-radius:10px;font-weight:600}
+    .btn:hover{background:#1f222b}
+    .btn.primary{background:#0f172a;border-color:#1f2937}
+    .btn.primary:hover{background:#111827}
+    .small{font-size:12px;color:var(--sub)}
+    .section{border:1px solid var(--border);background:#0f1116;border-radius:14px;padding:12px}
+    .msglist{flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px;padding:4px}
+    .msg{display:flex;gap:10px}
+    .bubble{max-width:800px;border:1px solid var(--border);background:var(--panel);padding:10px 12px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word}
+    .me .bubble{background:#0e141b}
+    .ai .bubble{background:#10151f}
+    .meta{font-size:11px;color:var(--sub);margin-bottom:4px}
+    .footer{display:flex;gap:8px;align-items:flex-start;border-top:1px solid var(--border);padding-top:12px}
+    .chips{display:flex;gap:6px;flex-wrap:wrap}
+    .chip{font-size:11px;border:1px solid var(--border);background:transparent;color:var(--sub);padding:4px 8px;border-radius:999px}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .tag{display:inline-block;border:1px solid var(--border);padding:3px 6px;border-radius:6px;font-size:11px;color:var(--sub)}
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;font-size:12px;background:#0b0e13;border:1px solid var(--border);padding:2px 6px;border-radius:6px}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;font-size:13px}
+    .hidden{display:none}
+    .imgthumb{max-width:160px;border:1px solid var(--border);border-radius:8px}
+  </style>
+</head>
+<body>
+<header>
+  <h1>Assignment #10 — Customer Persona Chatbot</h1>
+  <div class="right">
+    <span class="pill">Proxy • Cloud Run</span>
+    <button class="btn" id="exportTemplateBtn">Export Template JSON</button>
+    <button class="btn" id="newThreadBtn">New Thread</button>
+  </div>
+</header>
+
+<div class="container">
+  <aside>
+    <!-- API section removed (key not needed in browser with proxy) -->
+    <div class="section">
+      <h2>Persona Prompt Template</h2>
+      <textarea id="systemPrompt" placeholder="Describe your target customer persona. Ex: 'You are Aisha, a cost‑conscious student who buys mid‑tier phone accessories on weekends. You care about durability, fast shipping, and bundle discounts.'"></textarea>
+      <div class="chips">
+        <button class="btn" id="savePrompt">Save Persona</button>
+        <span class="tag" id="promptSaved">—</span>
+      </div>
+      <div class="small">All changes are logged in the Iteration Log for your submission.</div>
+    </div>
+
+    <div class="section">
+      <h2>Guiderails</h2>
+      <textarea id="guardrails" placeholder="Rules the chatbot must follow (no medical/financial advice, keep answers under 120 words, cite interview notes when making claims, avoid profanity, ask clarifying questions if unsure, etc.)"></textarea>
+      <button class="btn" id="saveGuardrails">Save Guiderails</button>
+    </div>
+
+    <div class="section">
+      <h2>Supporting Interviews (notes)</h2>
+      <textarea id="supporting" placeholder="- Interview #1 (Jules, 24): pain points...
+- Interview #2 (Sam, 32): goals...
+- Interview #3 (Mai, 19): objections..."></textarea>
+      <button class="btn" id="saveSupporting">Save Notes</button>
+    </div>
+
+    <div class="section">
+      <h2>Iteration Log</h2>
+      <div class="small">Auto‑captures prompt edits, threads, and guardrail updates.</div>
+      <pre id="log" class="mono" style="white-space:pre-wrap;max-height:240px;overflow:auto;border:1px solid var(--border);padding:8px;border-radius:8px;background:#0a0d12;"></pre>
+      <button class="btn" id="clearLog">Clear Log</button>
+    </div>
+  </aside>
+
+  <main>
+    <div class="section msglist" id="messages"></div>
+
+    <div class="section">
+      <div class="meta">Attach image (optional): the model can talk about an image (jpg/png).</div>
+      <input type="file" id="imageInput" accept="image/png,image/jpeg" />
+      <div id="imagePreview" class="small"></div>
+    </div>
+
+    <div class="footer">
+      <textarea id="userInput" placeholder="Ask your customer persona a question… (Shift+Enter for newline)"></textarea>
+      <div class="col" style="width:220px">
+        <button class="btn primary" id="sendBtn">Send ↵</button>
+        <button class="btn" id="stopBtn">Stop</button>
+        <div class="small">Guardrails enforced client‑side (basic) + via prompt.</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+(() => {
+  const PROXY_URL = "https://gemini-proxy-656392949614.us-central1.run.app/generate";
+
+  const el = id => document.getElementById(id);
+  const state = {
+    model: localStorage.getItem('gg_model') || 'gemini-2.5-pro',
+    sys: localStorage.getItem('gg_system') || '',
+    rails: localStorage.getItem('gg_rails') || '',
+    support: localStorage.getItem('gg_support') || '',
+    thread: [],
+    controller: null,
+    lastImage: null,
+    log: JSON.parse(localStorage.getItem('gg_log') || '[]')
+  };
+
+  // UI init
+  el('systemPrompt').value = state.sys;
+  el('guardrails').value = state.rails;
+  el('supporting').value = state.support;
+  refreshLog();
+  renderThread();
+
+  function logEvent(kind, payload) {
+    const entry = { t: new Date().toISOString(), kind, ...payload };
+    state.log.unshift(entry);
+    localStorage.setItem('gg_log', JSON.stringify(state.log.slice(0,500)));
+    refreshLog();
+  }
+  function refreshLog() {
+    el('log').textContent = state.log.map(e => `[${e.t}] ${e.kind}: ${JSON.stringify(e).slice(0,400)}`).join('\n');
+  }
+
+  // Save buttons
+  el('savePrompt').onclick = () => {
+    state.sys = el('systemPrompt').value;
+    localStorage.setItem('gg_system', state.sys);
+    el('promptSaved').textContent = 'Saved ✔';
+    setTimeout(()=> el('promptSaved').textContent = '—', 1500);
+    logEvent('prompt.update', { sys: state.sys });
+  };
+  el('saveGuardrails').onclick = () => {
+    state.rails = el('guardrails').value;
+    localStorage.setItem('gg_rails', state.rails);
+    logEvent('guardrails.update', { rails: state.rails });
+  };
+  el('saveSupporting').onclick = () => {
+    state.support = el('supporting').value;
+    localStorage.setItem('gg_support', state.support);
+    logEvent('support.update', { support: state.support });
+  };
+  el('clearLog').onclick = () => {
+    if (confirm('Clear the iteration log?')) {
+      state.log = [];
+      localStorage.removeItem('gg_log');
+      refreshLog();
+    }
+  };
+  el('newThreadBtn').onclick = () => {
+    if (!confirm('Start a new thread? Current messages will be cleared.')) return;
+    state.thread = [];
+    renderThread();
+    state.lastImage = null;
+    el('imagePreview').innerHTML = '';
+    el('imageInput').value = '';
+    logEvent('thread.new', {});
+  };
+
+  // Image preview/load
+  el('imageInput').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const b64 = await fileToBase64(f);
+    state.lastImage = { mimeType: f.type, data: b64.split(',')[1] };
+    el('imagePreview').innerHTML = `<div class="small">Attached: ${f.name}</div><img class="imgthumb" src="${b64}" />`;
+  });
+  function fileToBase64(file) {
+    return new Promise((res, rej) => {
+      const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
+    });
+  }
+
+  // Chat
+  el('sendBtn').onclick = send;
+  el('userInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  el('stopBtn').onclick = () => { if (state.controller) state.controller.abort(); };
+
+  function renderThread() {
+    const list = el('messages'); list.innerHTML = '';
+    state.thread.forEach(m => {
+      const row = document.createElement('div');
+      row.className = 'msg ' + (m.role === 'user' ? 'me' : 'ai');
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      if (m.meta) {
+        const meta = document.createElement('div'); meta.className='meta'; meta.textContent = m.meta; bubble.appendChild(meta);
+      }
+      if (m.image) {
+        const img = document.createElement('img'); img.src = `data:${m.image.mimeType};base64,${m.image.data}`; img.className='imgthumb';
+        bubble.appendChild(img);
+        bubble.appendChild(document.createElement('br'));
+        bubble.appendChild(document.createElement('br'));
+      }
+      bubble.append(document.createTextNode(m.content || m.candidates?.[0]?.content?.parts?.map(p=>p.text).join('\n') || ''));
+      row.appendChild(bubble);
+      list.appendChild(row);
+    });
+    list.scrollTop = list.scrollHeight;
+  }
+
+  // Simple client-side guardrails (example)
+  const banned = [/(?<!\w)ssn(?!\w)/i, /credit\s*card/i, /kill\s+yourself/i, /racial\s+slur/i];
+  function violatesGuardrails(text) {
+    if (!text) return false;
+    for (const r of banned) if (r.test(text)) return `Blocked by local guardrail: ${r}`;
+    return false;
+  }
+
+  async function send() {
+    const userText = el('userInput').value.trim();
+    if (!userText && !state.lastImage) return;
+
+    // local guardrails pre-check
+    const v = violatesGuardrails(userText);
+    if (v) { alert(v); return; }
+
+    // push user msg
+    const userMsg = { role:'user', content:userText, image: state.lastImage || null };
+    state.thread.push(userMsg);
+    renderThread();
+    el('userInput').value = '';
+    // reset image one-shot
+    state.lastImage = null; el('imagePreview').innerHTML = ''; el('imageInput').value='';
+
+    // Compose contents -> Proxy
+    const contents = [];
+    const sys = (state.sys||'').trim();
+    const rails = (state.rails||'').trim();
+    const support = (state.support||'').trim();
+    const sysBlock = [
+      (sys ? `ROLE: Customer Persona\n${sys}` : ''),
+      (rails ? `GUIDERAILS:\n${rails}` : ''),
+      (support ? `SUPPORTING INTERVIEWS:\n${support}` : '')
+    ].filter(Boolean).join('\n\n').slice(0, 6000);
+
+    if (sysBlock) {
+      contents.push({
+        role: 'user',
+        parts: [{ text: `You are role‑playing the following customer persona and must obey guardrails and cite interviews where relevant.\n\n${sysBlock}` }]
+      });
+    }
+
+    for (const m of state.thread) {
+      const parts = [];
+      if (m.content) parts.push({ text: m.content });
+      if (m.image) parts.push({
+        inline_data: { mime_type: m.image.mimeType, data: m.image.data }
+      });
+      contents.push({ role: m.role === 'user' ? 'user' : 'model', parts });
+    }
+
+    const body = {
+      model: state.model,
+      contents,
+      safetySettings: [
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" }
+      ],
+      generationConfig: {
+        temperature: 0.7, topK: 40, topP: 0.9, maxOutputTokens: 800
+      }
+    };
+
+    // show placeholder
+    const aiIndex = state.thread.length;
+    state.thread.push({ role:'model', content:'…thinking…' });
+    renderThread();
+
+    try {
+      state.controller = new AbortController();
+      const res = await fetch(PROXY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: state.controller.signal
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`Proxy ${res.status}: ${t}`);
+      }
+      const data = await res.json();
+      const text = (data.candidates?.[0]?.content?.parts || [])
+        .map(p => p.text || '').join('');
+      const postV = violatesGuardrails(text);
+      const finalText = postV ? `[Response blocked by guardrails]\n\n${postV}` : text || '(no response)';
+      state.thread[aiIndex] = { role:'model', content: finalText };
+      renderThread();
+      logEvent('chat.turn', { respLen: finalText.length });
+    } catch (err) {
+      state.thread[aiIndex] = { role:'model', content:`[Error] ${err.message}` };
+      renderThread();
+    } finally {
+      state.controller = null;
+    }
+  }
+
+  // Export template JSON for assignment
+  el('exportTemplateBtn').onclick = () => {
+    const payload = {
+      assignment: "Assignment #10 – Build a Chatbot",
+      available: "2025-07-06T21:00:00-07:00",
+      due: "2025-08-23T21:00:00-07:00",
+      percent_of_total: 1.67,
+      persona_template: {
+        system_prompt: state.sys,
+        guiderails: state.rails,
+        supporting_interviews: state.support
+      },
+      iteration_log: state.log,
+      model: state.model
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'assignment10_template_export.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+})();
+</script>
+</body>
+</html>
